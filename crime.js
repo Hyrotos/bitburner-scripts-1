@@ -10,9 +10,12 @@ export async function main(ns) {
     let crime = ns.args.length == 0 ? undefined : ns.args.join(" "); // Need to join in case the crime has a space in it - it will be treated as two args
     ns.tail();
     if (!crime || ns.args.includes("--fast-crimes-only")) // More sophisticated auto-scaling crime logic
-        await crimeForKillsKarmaStats(ns, 0, 0, Number.MAX_SAFE_INTEGER, ns.commitCrime, ns.args.includes("--fast-crimes-only"));
+        await crimeForKillsKarmaStats(ns, 0, 54000, 0, ns.commitCrime, ns.args.includes("--fast-crimes-only"));
     else // Simple crime loop for the specified crime
         await legacyAutoCrime(ns, crime);
+
+    // now run work-for-faction to not run idle
+    ns.exec('work-for-factions.js', 'home', 1, '--fast-crimes-only', '--no-coding-contracts');
 }
 
 /** @param {NS} ns **/
