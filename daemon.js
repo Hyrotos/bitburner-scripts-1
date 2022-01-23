@@ -307,7 +307,7 @@ async function runPeriodicScripts(ns) {
     }
     // Super-early aug, if we are poor, spend hashes as soon as we get them for a quick cash injection. (Only applies if we have hacknet servers)
     if (9 in dictSourceFiles && ns.getServerMoneyAvailable("home") < 10000000 && (ns.getServerMaxRam("home") - ns.getServerUsedRam("home")) >= 5.6) {
-        await runCommand(ns, `0; if(ns.hacknet.spendHashes("Sell for Money")) ns.toast('Sold 4 hashes for \$1M', 'success')`, '/Temp/sell-hashes-for-money.js');
+        await runCommand(ns, `0; ns.hacknet.spendHashes("Sell for Money")', 'success')`, '/Temp/sell-hashes-for-money.js');
     }
 }
 
