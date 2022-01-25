@@ -138,8 +138,8 @@ const argsSchema = [
     ['x', false], // Focus on a strategy that produces the most hack EXP rather than money
     ['xp-only', false],
     ['n', false], // Can toggle on using hacknet nodes for extra hacking ram (at the expense of hash production)
-    ['silent-misfires', false],
-    ['use-hacknet-nodes', false],
+    ['silent-misfires', true],
+    ['use-hacknet-nodes', true],
     ['initial-max-targets', 2],
     ['max-steal-percentage', 0.75], // Don't steal more than this in case something goes wrong with timing or scheduling, it's hard to recover from
     ['cycle-timing-delay', 16000],
@@ -307,7 +307,7 @@ async function runPeriodicScripts(ns) {
     }
     // Super-early aug, if we are poor, spend hashes as soon as we get them for a quick cash injection. (Only applies if we have hacknet servers)
     if (9 in dictSourceFiles && ns.getServerMoneyAvailable("home") < 10000000 && (ns.getServerMaxRam("home") - ns.getServerUsedRam("home")) >= 5.6) {
-        await runCommand(ns, `0; ns.hacknet.spendHashes("Sell for Money")', 'success')`, '/Temp/sell-hashes-for-money.js');
+        await runCommand(ns, `ns.hacknet.spendHashes("Sell for Money")`, '/Temp/sell-hashes-for-money.js');
     }
 }
 
