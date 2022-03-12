@@ -2,6 +2,7 @@ import { formatNumberShort, formatMoney, getNsDataThroughFile, getActiveSourceFi
 
 const argsSchema = [
     ['hide-stocks', false],
+    ['show-peoplekilled', false],
 ];
 
 export function autocomplete(data, args) {
@@ -15,9 +16,10 @@ export async function main(ns) {
     const doc = eval('document');
     const hook0 = doc.getElementById('overview-extra-hook-0');
     const hook1 = doc.getElementById('overview-extra-hook-1');
+    const dictSourceFiles = await getActiveSourceFiles(ns, false); // Find out what source files the user has unlocked
+    let playerInfo = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt');
+    const bitNode = playerInfo.bitNodeN;
     let stkSymbols = null;
-    let dictSourceFiles = await getActiveSourceFiles(ns); // Find out what source files the user has unlocked
-    let playerInfo = (await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt'));
     if (!options['hide-stocks'] && playerInfo.hasTixApiAccess) // Auto-disabled if we do not have the TSK API
         stkSymbols = await getNsDataThroughFile(ns, `ns.stock.getSymbols()`, '/Temp/stock-symbols.txt');
     // Main stats update loop
@@ -26,15 +28,19 @@ export async function main(ns) {
             const headers = []
             const values = [];
 
-            if (9 in dictSourceFiles) { // Section not relevant if you don't have access to hacknet servers
+            // Show what bitNode we're currently playing
+            headers.push("BitNode");
+            values.push(`${bitNode}.${1 + (dictSourceFiles[bitNode] || 0)}`);
+
+            if (9 in dictSourceFiles || 9 == bitNode) { // Section not relevant if you don't have access to hacknet servers
                 const hashes = await getNsDataThroughFile(ns, '[ns.hacknet.numHashes(), ns.hacknet.hashCapacity()]', '/Temp/hash-stats.txt')
                 if (hashes[1] > 0) {
                     headers.push("Hashes");
                     values.push(`${formatNumberShort(hashes[0], 3, 1)}/${formatNumberShort(hashes[1], 3, 1)}`);
                 }
-                // Detect and notify the HUD if we are liquidating
-                if (ns.ps("home").some(p => p.filename.includes('spend-hacknet-hashes') && (p.args.includes("--liquidate") || p.args.includes("-l")))) {
-                    headers.splice(1, 0, " ");
+                // Detect and notify the HUD if we are liquidating hashes (selling them as quickly as possible)               
+                if (ns.isRunning('spend-hacknet-hashes.js', 'home', '--liquidate') || ns.isRunning('spend-hacknet-hashes.js', 'home', '-l')) {
+                    headers.push(" ");
                     values.push("Liquidating");
                 }
             }
@@ -55,21 +61,36 @@ export async function main(ns) {
             headers.push("ScrExp");
             values.push(formatNumberShort(ns.getScriptExpGain(), 3, 2) + '/sec');
 
-            if (2 in dictSourceFiles) { // Gang income is only relevant once gangs are unlocked
-                const gangInfo = await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt');
+            let gangInfo = false;
+            if (2 in dictSourceFiles || 2 == bitNode) { // Gang income is only relevant once gangs are unlocked
+                gangInfo = await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt');
                 if (gangInfo !== false) {
+                    // Add Gang Income
                     headers.push("Gang");
                     values.push(formatMoney(gangInfo.moneyGainRate * 5, 3, 2) + '/sec');
+                    // Add Gang Territory
+                    headers.push("Territory");
+                    values.push(formatNumberShort(gangInfo.territory * 100, 4, 2) + "%");
                 }
             }
 
             const karma = ns.heart.break();
-            if (karma <= -9) {
+            if (karma <= -9 // Don't spoiler Karma if they haven't started doing crime yet
+                && !gangInfo) { // If in a gang, you know you have oodles of bad Karma. Save some space
                 headers.push("Karma");
                 values.push(formatNumberShort(karma, 3, 2));
             }
 
-            const sharePower = ns.getSharePower();
+            if (options['show-peoplekilled']) {
+                playerInfo = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt');
+                const numPeopleKilled = playerInfo.numPeopleKilled;
+                if (numPeopleKilled > 0) {
+                    headers.push("Kills");
+                    values.push(formatNumberShort(numPeopleKilled, 6, 0));
+                }
+            }
+
+            const sharePower = await getNsDataThroughFile(ns, 'ns.getSharePower()', '/Temp/share-power.txt');
             if (sharePower > 1) {
                 headers.push("Share Pwr");
                 values.push(formatNumberShort(sharePower, 3, 2));

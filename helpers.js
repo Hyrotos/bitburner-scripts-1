@@ -1,5 +1,5 @@
 /**
- * Return a formatted representation of the monetary amount using scale sympols (e.g. $6.50M)
+ * Return a formatted representation of the monetary amount using scale symbols (e.g. $6.50M)
  * @param {number} num - The number to format
  * @param {number=} maxSignificantFigures - (default: 6) The maximum significant figures you wish to see (e.g. 123, 12.3 and 1.23 all have 3 significant figures)
  * @param {number=} maxDecimalPlaces - (default: 3) The maximum decimal places you wish to see, regardless of significant figures. (e.g. 12.3, 1.2, 0.1 all have 1 decimal)
@@ -150,8 +150,9 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, fnIsAlive, command,
     // Prepare a command that will write out a new file containing the results of the command
     // unless it already exists with the same contents (saves time/ram to check first)
     // If an error occurs, it will write an empty file to avoid old results being misread.
-    const commandToFile = `let result = ""; try { result = JSON.stringify(${command}); } catch { }
-        if (ns.read("${fName}") != result) await ns.write("${fName}", result, 'w')`;
+    const commandToFile = `let result="";try{result=JSON.stringify(
+        ${command}
+        );}catch{} const f="${fName}"; if(ns.read(f)!=result) await ns.write(f,result,'w')`;
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, false, maxRetries, retryDelayMs);
     // Wait for the process to complete
@@ -174,7 +175,7 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, fnIsAlive, command,
  */
 export async function runCommand(ns, command, fileName, verbose = false, maxRetries = 5, retryDelayMs = 50, ...args) {
     checkNsInstance(ns, '"runCommand"');
-    if (!verbose) disableLogs(ns, ['run', 'sleep']);
+    if (!verbose) disableLogs(ns, ['run', 'asleep']);
     return await runCommand_Custom(ns, ns.run, command, fileName, verbose, maxRetries, retryDelayMs, ...args);
 }
 
@@ -194,7 +195,7 @@ export async function runCommand_Custom(ns, fnRun, command, fileName, verbose = 
     // To improve performance and save on garbage collection, we can skip writing this exact same script was previously written (common for repeatedly-queried data)
     if (ns.read(fileName) != script) await ns.write(fileName, script, "w");
     return await autoRetry(ns, () => fnRun(fileName, ...args), temp_pid => temp_pid !== 0,
-        () => `Run command returned no pid. Destination: ${fileName} Command: ${command}\nEnsure you have sufficient free RAM to run this temporary script.`,
+        () => `Run command returned no pid.\n  Destination: ${fileName}\n  Command: ${command}\nEnsure you have sufficient free RAM to run this temporary script.`,
         maxRetries, retryDelayMs, undefined, verbose);
 }
 
@@ -218,12 +219,12 @@ export async function waitForProcessToComplete(ns, pid, verbose) {
  **/
 export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose) {
     checkNsInstance(ns, '"waitForProcessToComplete_Custom"');
-    if (!verbose) disableLogs(ns, ['sleep']);
+    if (!verbose) disableLogs(ns, ['asleep']);
     // Wait for the PID to stop running (cheaper than e.g. deleting (rm) a possibly pre-existing file and waiting for it to be recreated)
     for (var retries = 0; retries < 1000; retries++) {
         if (!fnIsAlive(pid)) break; // Script is done running
         if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${retries})`);
-        await ns.sleep(10);
+        await ns.asleep(10);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
     if (fnIsAlive(pid)) {
@@ -250,7 +251,7 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
             const errorLog = `${fatal ? 'FAIL' : 'WARN'}: (${maxRetries} retries remaining): ${String(error)}`
             log(ns, errorLog, fatal, !verbose ? undefined : (fatal ? 'error' : 'warning'))
             if (fatal) throw error;
-            await ns.sleep(retryDelayMs);
+            await ns.asleep(retryDelayMs);
             retryDelayMs *= backoffRate;
         }
     }
@@ -285,13 +286,13 @@ export function scanAllServers(ns) {
 
 /** @param {NS} ns 
  * Get a dictionary of active source files, taking into account the current active bitnode as well. **/
-export async function getActiveSourceFiles(ns) {
-    return await getActiveSourceFiles_Custom(ns, getNsDataThroughFile);
+export async function getActiveSourceFiles(ns, includeLevelsFromCurrentBitnode = true) {
+    return await getActiveSourceFiles_Custom(ns, getNsDataThroughFile, includeLevelsFromCurrentBitnode);
 }
 
 /** @param {NS} ns 
  * getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage **/
-export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile) {
+export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, includeLevelsFromCurrentBitnode = true) {
     checkNsInstance(ns, '"getActiveSourceFiles"');
     let tempFile = '/Temp/owned-source-files.txt';
     // Find out what source files the user has unlocked
@@ -302,7 +303,10 @@ export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile) {
         dictSourceFiles = dictSourceFiles ? JSON.parse(dictSourceFiles) : {};
     }
     // If the user is currently in a given bitnode, they will have its features unlocked
-    dictSourceFiles[(await fnGetNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')).bitNodeN] = 3;
+    if (includeLevelsFromCurrentBitnode) {
+        const bitNodeN = (await fnGetNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')).bitNodeN;
+        dictSourceFiles[bitNodeN] = Math.max(3, dictSourceFiles[bitNodeN] || 0);
+    }
     return dictSourceFiles;
 }
 
