@@ -471,7 +471,7 @@ let log = (ns, message, tprint = false, toastStyle = "") => {
     if (message == lastLog) return;
     ns.print(message);
     if (tprint) ns.tprint(message);
-    if (toastStyle) ns.toast(message, toastStyle);
+    // if (toastStyle) ns.toast(message, toastStyle);
     return lastLog = message;
 }
 
