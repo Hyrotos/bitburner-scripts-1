@@ -342,8 +342,13 @@ async function kickstartHackXp(ns) {
         const maxXpTime = options['initial-hack-xp-time'];
         const start = Date.now();
         log(`INFO: Running Hack XP-focused cycles for ${maxXpTime} seconds to further boost hack XP and speed up main hack cycle times. (set --initial-hack-xp-time 0 to disable this step.)`);
-        while (maxXpCycles-- > 0 && Date.now() - start < maxXpTime * 1000)
-            await ns.asleep((await farmHackXp(ns, 1, verbose, 1)) || loopInterval);
+        while (maxXpCycles-- > 0 && Date.now() - start < maxXpTime * 1000) {
+            let cycleTime = await farmHackXp(ns, 1, verbose, 1);
+            if (cycleTime)
+                await ns.asleep(cycleTime);
+            else
+                return log('WARNING: Failed to schedule an XP cycle', false, 'warning');
+        }
     }
 }
 
@@ -477,14 +482,17 @@ async function doTargetingLoop(ns) {
                 // Pull additional data about servers that infrequently changes
                 await refreshDynamicServerData(ns, addedServerNames);
                 // Occassionally print our current targetting order (todo, make this controllable with a flag or custom UI?)
-                if (verbose && loops % 600 == 0)
-                    log('Targetting Order:\n  ' + serverListByTargetOrder.filter(s => s.shouldHack()).map(s =>
+                if (verbose && loops % 600 == 0) {
+                    const targetsLog = 'Targetting Order:\n  ' + serverListByTargetOrder.filter(s => s.shouldHack()).map(s =>
                         `${s.isPrepped() ? '*' : ' '} ${s.canHack() ? '✓' : 'X'} Money: ${formatMoney(s.getMoney(), 4)} of ${formatMoney(s.getMaxMoney(), 4)} ` +
                         `(${formatMoney(s.getMoneyPerRamSecond(), 4)}/ram.sec), Sec: ${formatNumber(s.getSecurity(), 3)} of ${formatNumber(s.getMinSecurity(), 3)}, ` +
                         `TTW: ${formatDuration(s.timeToWeaken())}, Hack: ${s.requiredHackLevel} - ${s.name}` +
                         (!stockMode || !serverStockSymbols[s.name] ? '' : ` Sym: ${serverStockSymbols[s.name]} Owned: ${serversWithOwnedStock.includes(s.name)} ` +
                             `Manip: ${shouldManipulateGrow[s.name] ? "grow" : shouldManipulateHack[s.name] ? "hack" : '(disabled)'}`))
-                        .join('\n  '));
+                        .join('\n  ');
+                    log(targetsLog);
+                    await ns.write("/Temp/targets.txt", targetsLog, "w");
+                }
             }
             var prepping = [];
             var preppedButNotTargeting = [];
@@ -1511,7 +1519,7 @@ async function scheduleHackExpCycle(ns, server, percentOfFreeRamToConsume, verbo
                 singleServerLimit++;
         }
         // Note: Next time we tick, Hack will have *just* fired, so for the moment we will be at 0 money and above min security. Trust that all is well
-        return cycleTime; // Ideally we wake up right after hack has fired so we can schedule another immediately
+        return success ? cycleTime : false; // Ideally we wake up right after hack has fired so we can schedule another immediately
     } finally {
         farmXpReentryLock[server.name] = false;
     }
