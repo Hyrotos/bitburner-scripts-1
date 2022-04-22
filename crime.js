@@ -12,7 +12,7 @@ export async function main(ns) {
     let crime = ns.args.length == 0 ? undefined : ns.args.join(" "); // Need to join in case the crime has a space in it - it will be treated as two args
     ns.tail();
     if (!crime || ns.args.includes(argFastCrimesOnly)) // More sophisticated auto-scaling crime logic
-        await crimeForKillsKarmaStats(ns, 0, 54000, Number.MAX_SAFE_INTEGER, ns.args.includes(argFastCrimesOnly));
+        await crimeForKillsKarmaStats(ns, 0, 0, Number.MAX_SAFE_INTEGER, ns.args.includes(argFastCrimesOnly));
     else // Simple crime loop for the specified crime
         await legacyAutoCrime(ns, crime);
 
