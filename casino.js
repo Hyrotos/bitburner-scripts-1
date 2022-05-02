@@ -1,10 +1,11 @@
-import { log, getFilePath, waitForProcessToComplete, runCommand, getNsDataThroughFile } from './helpers.js'
+import { log, getConfiguration, getFilePath, waitForProcessToComplete, runCommand, getNsDataThroughFile } from './helpers.js'
 
 const ran_flag = "/Temp/ran-casino.txt"
 let doc = eval("document");
 let options;
 const argsSchema = [
-	['save-sleep-time', 5], // Time to sleep in milliseconds after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
+	['save-sleep-time', 10], // Time to sleep in milliseconds after saving. If you are having trouble with your automatic saves not "taking effect" try increasing this.
+	['click-sleep-time', 1], // Time to sleep in milliseconds after clicking any button (or setting text). Increase if your are getting errors on click.
 	['use-basic-strategy', false], // Set to true to use the basic strategy (Stay on 17+)
 	['enable-logging', false], // Set to true to pop up a tail window and generate logs.
 	['kill-all-scripts', false], // Set to true to kill all running scripts before running.
@@ -20,10 +21,14 @@ export function autocomplete(data, args) {
 	return [];
 }
 
+let _ns; // Lazy global copy of ns so we can sleep in the click handler
+
 /** @param {NS} ns 
  *  Super recommend you kill all other scripts before starting this up. **/
 export async function main(ns) {
-	options = ns.flags(argsSchema);
+	options = getConfiguration(ns, argsSchema);
+	if (!options) return; // Invalid options, or ran in --help mode.
+	_ns = ns;
 	const saveSleepTime = options['save-sleep-time'];
 	if (options['enable-logging'])
 		ns.tail()
@@ -40,9 +45,14 @@ export async function main(ns) {
 		}
 	}
 
+	// Helper function to detect if the "Stop [[faction|company] work|styding|training]" etc... button from the focus screen is up
+	const checkForFocusScreen = () =>
+		find("//button[contains(text(), 'Stop playing')]") ? false : // False positive, casino "stop" button, no problems here
+			find("//button[contains(text(), 'Stop')]"); // Otherwise, a button with "Stop" on it is probably from the work screen
+
 	// Step 2: Navigate to the City Casino
 	try { // Try to do this without SF4, because it's faster and doesn't require a temp script to be cleaned up below
-		const btnStopAction = find("//button[contains(text(), 'Stop')]");
+		const btnStopAction = checkForFocusScreen();
 		if (btnStopAction) // If we were performing an action unfocused, it will be focused on restart and we must stop that action to navigate.
 			await click(btnStopAction);
 		// Click our way to the city casino
@@ -69,7 +79,9 @@ export async function main(ns) {
 			const btnStay = find("//button[text() = 'Stay']");
 			if (btnStay) await click(btnStay); // Trigger the game to end if we didn't instantly win/lose our $1 bet.
 		} else {
-			// TODO: Gah, because we haven't killed scripts, it's possible another script stole focus. Detect and handle that case.
+			// Because we haven't killed scripts yet, it's possible another script stole focus again. Detect and handle that case.
+			if (checkForFocusScreen())
+				return ns.tprint("ERROR: It looks like something stole focus while we were trying to automate the casino. Please try again.");
 			await ns.write(ran_flag, true, "w"); // Write a flag other scripts can check for indicating we think we've been kicked out of the casino.
 			return ns.tprint("INFO: We've appear to already have been previously kicked out of the casino.");
 		}
@@ -99,8 +111,10 @@ export async function main(ns) {
 			if (won === null) {
 				if (find("//p[contains(text(), 'Tie')]")) break; // If we tied, break and start a new hand.
 				const txtCount = find("//p[contains(text(), 'Count:')]");
-				if (!txtCount) { // I'm incapable of producing a bug, so clearly the only reason for this failing is we've won.
-					return await onCompletion(ns);
+				if (!txtCount) { // If we can't find the count, we've either been kicked out, or maybe routed to another screen.
+					return checkForFocusScreen() /* Detect the case where we started working/training */ ?
+						ns.tprint("ERROR: It looks like something stole focus while we were trying to automate the casino. Please try again.") :
+						await onCompletion(ns); // Otherwise, assume we've been kicked out of the casino for having stolen the max 10b
 				}
 				const allCounts = txtCount.querySelectorAll('span');
 				const highCount = Number(allCounts[allCounts.length - 1].innerText);
@@ -113,7 +127,7 @@ export async function main(ns) {
 		if (won === null) continue; // Only possible if we tied and broke out early. Start a new hand.
 		if (!won) { // Reload if we lost
 			eval("window").onbeforeunload = null; // Disable the unsaved changes warning before reloading
-			await ns.sleep(1); // Yeild execution for an instant incase the game needs to finish a save or something
+			await ns.sleep(saveSleepTime); // Yeild execution for an instant incase the game needs to finish a save or something
 			location.reload(); // Force refresh the page without saving           
 			return await ns.asleep(10000); // Keep the script alive to be safe. Presumably the page reloads before this completes.
 		}
@@ -167,8 +181,14 @@ async function onCompletion(ns) {
 }
 
 // Some DOM helpers (partial credit to @ShamesBond)
-async function click(elem) { await elem[Object.keys(elem)[1]].onClick({ isTrusted: true }); }
-async function setText(input, text) { await input[Object.keys(input)[1]].onChange({ isTrusted: true, target: { value: text } }); }
+async function click(elem) {
+	await elem[Object.keys(elem)[1]].onClick({ isTrusted: true });
+	if (options['click-sleep-time']) await _ns.asleep(options['click-sleep-time']);
+}
+async function setText(input, text) {
+	await input[Object.keys(input)[1]].onChange({ isTrusted: true, target: { value: text } });
+	if (options['click-sleep-time']) await _ns.asleep(options['click-sleep-time']);
+}
 function find(xpath) { return doc.evaluate(xpath, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; }
 
 // Better logic for when to HIT / STAY (Partial credit @drider)
