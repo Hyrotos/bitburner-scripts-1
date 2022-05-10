@@ -157,23 +157,34 @@ export async function main(ns) {
     }
 }
 
+/** @param {NS} ns */
 async function loadStartupData(ns) {
     repToDonate = 150 * ((await tryGetBitNodeMultipliers(ns))?.RepToDonateToFaction || 1);
     const playerInfo = await getPlayerInfo(ns);
     const allKnownFactions = factions.concat(playerInfo.factions.filter(f => !factions.includes(f)));
 
     // Get some faction and augmentation information to decide what remains to be purchased
-    dictFactionFavors = await getNsDataThroughFile(ns, dictCommand('ns.getFactionFavor(o)'), '/Temp/faction-favor.txt', allKnownFactions);
-    const dictFactionAugs = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationsFromFaction(o)'), '/Temp/faction-augs.txt', allKnownFactions);
+    dictFactionFavors = await getNsDataThroughFile(ns, dictCommand('ns.getFactionFavor(o)'), '/Temp/getFactionFavors.txt', allKnownFactions);
+    const dictFactionAugs = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationsFromFaction(o)'), '/Temp/getAugmentationsFromFactions.txt', allKnownFactions);
     const augmentationNames = [...new Set(Object.values(dictFactionAugs).flat())];
-    const dictAugRepReqs = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationRepReq(o)'), '/Temp/aug-repreqs.txt', augmentationNames);
-    const dictAugStats = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationStats(o)'), '/Temp/aug-stats.txt', augmentationNames);
+    const dictAugRepReqs = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationRepReq(o)'), '/Temp/getAugmentationRepReqs.txt', augmentationNames);
+    const dictAugStats = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationStats(o)'), '/Temp/getAugmentationStats.txt', augmentationNames);
     const ownedAugmentations = await getNsDataThroughFile(ns, `ns.getOwnedAugmentations(true)`, '/Temp/player-augs-purchased.txt');
     const installedAugmentations = await getNsDataThroughFile(ns, `ns.getOwnedAugmentations()`, '/Temp/player-augs-installed.txt');
     // Based on what augmentations we own, we can change our own behaviour (e.g. whether to allow work to steal focus)
     hasFocusPenaly = !installedAugmentations.includes("Neuroreceptor Management Implant"); // Check if we have an augmentation that lets us not have to focus at work (always nicer if we can background it)
     shouldFocusAtWork = !options['no-focus'] && hasFocusPenaly; // Focus at work for the best rate of rep gain, unless focus activities are disabled via command line
     hasSimulacrum = installedAugmentations.includes("The Blade's Simulacrum");
+
+    // Find out if we're in a gang
+    const gangInfo = await getGangInfo(ns);
+    playerGang = gangInfo ? gangInfo.faction : null;
+    if (playerGang) { // Whatever augmentations the gang provides are so easy to get form them, might as well ignore any other factions that have them.
+        const gangAugs = dictFactionAugs[playerGang];
+        ns.print(`Your gang ${playerGang} provides easy access to ${gangAugs.length} augs. Ignoring these augs from the original factions that provide them.`);
+        for (const faction of allKnownFactions.filter(f => f != playerGang))
+            dictFactionAugs[faction] = dictFactionAugs[faction].filter(a => !gangAugs.includes(a));
+    }
 
     mostExpensiveAugByFaction = Object.fromEntries(allKnownFactions.map(f => [f,
         dictFactionAugs[f].filter(aug => !ownedAugmentations.includes(aug))
@@ -201,15 +212,11 @@ async function loadStartupData(ns) {
         ns.print(`${softCompletedFactions.length} factions will initially be skipped (all desired augs purchased): ${softCompletedFactions.join(", ")}`);
 
     // TODO: If --prioritize-invites is set, we should have a preferred faction order that puts easiest-invites-to-earn at the front (e.g. all city factions)
-
     numJoinedFactions = playerInfo.factions.length;
     fulcrummHackReq = await getServerRequiredHackLevel(ns, "fulcrumassets");
-
-    // Find out if we're in a gang
-    const gangInfo = await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt');
-    playerGang = gangInfo ? gangInfo.faction : null;
 }
 
+/** @param {NS} ns */
 async function mainLoop(ns) {
     if (!breakToMainLoop()) scope++; // Increase the scope of work if the last iteration completed early (i.e. due to all work within that scope being complete)
     mainLoopStart = Date.now();
@@ -223,7 +230,7 @@ async function mainLoop(ns) {
     }
     // Immediately accept any outstanding faction invitations for factions we want to earn rep with soon
     // TODO: If check if we would qualify for an invite to any factions just by travelling, and do so to start earning passive rep
-    const invites = await getNsDataThroughFile(ns, 'ns.checkFactionInvitations()', '/Temp/player-faction-invites.txt');
+    const invites = await checkFactionInvites(ns);
     const invitesToAccept = options['get-invited-to-every-faction'] || options['prioritize-invites'] ?
         invites.filter(f => !skipFactions.includes(f)) :
         invites.filter(f => !skipFactions.includes(f) && !softCompletedFactions.includes(f));
@@ -232,7 +239,7 @@ async function mainLoop(ns) {
     // Get some information about gangs (if unlocked)
     if (2 in dictSourceFiles) {
         if (!playerGang) { // Check if we've joined a gang since our last iteration
-            const gangInfo = await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt');
+            const gangInfo = await getGangInfo(ns);
             playerGang = gangInfo ? gangInfo.faction : null;
             // If we've only just now joined a gang, we have to reload startup data, because the augs offered by our gang faction has now changed.
             if (playerGang) await loadStartupData(ns);
@@ -249,6 +256,7 @@ async function mainLoop(ns) {
     if (7 in dictSourceFiles && !hasSimulacrum && !options['no-bladeburner-check'] && player.inBladeburner) {
         if (playerGang) { // Heuristic: If we're in a gang, its rep will give us access to most augs, we can take a break from working
             ns.print(`INFO: Gang will give us most augs, so pausing work to allow Bladeburner to operate.`);
+            await stop(ns); // stop working so bladeburner can run
             await ns.sleep(checkForNewPrioritiesInterval);
             return;
         }
@@ -359,7 +367,7 @@ async function earnFactionInvite(ns, factionName) {
     let player = await getPlayerInfo(ns);
     const joinedFactions = player.factions;
     if (joinedFactions.includes(factionName)) return true;
-    var invitations = await getNsDataThroughFile(ns, 'ns.checkFactionInvitations()', '/Temp/player-faction-invites.txt');
+    var invitations = await checkFactionInvites(ns);
     if (invitations.includes(factionName))
         return await tryJoinFaction(ns, factionName);
 
@@ -477,8 +485,8 @@ async function earnFactionInvite(ns, factionName) {
         ns.print(`You must be a CO (e.g. CEO/CTO) of a company to earn an invite to ${factionName}. This may take a while!`);
         let factionConfig = companySpecificConfigs.find(f => f.name == factionName); // We set up Silhouette with a "company-specific-config" so that we can work for an invite like any megacorporation faction.
         let companyNames = preferredCompanyFactionOrder.map(f => companySpecificConfigs.find(cf => cf.name == f)?.companyName || f);
-        let favorByCompany = await getNsDataThroughFile(ns, dictCommand('ns.getCompanyFavor(o)'), '/Temp/company-favors.txt', companyNames);
-        let repByCompany = await getNsDataThroughFile(ns, dictCommand('ns.getCompanyRep(o)'), '/Temp/company-reps.txt', companyNames);
+        let favorByCompany = await getNsDataThroughFile(ns, dictCommand('ns.getCompanyFavor(o)'), '/Temp/getCompanyFavors.txt', companyNames);
+        let repByCompany = await getNsDataThroughFile(ns, dictCommand('ns.getCompanyRep(o)'), '/Temp/getCompanyReps.txt', companyNames);
         // Change the company to work for into whichever company we can get to CEO fastest with. Minimize needed_rep/rep_gain_rate. CEO job is at 3.2e6 rep, so (3.2e6-current_rep)/(100+favor).
         factionConfig.companyName = companyNames.sort((a, b) => (3.2e6 - repByCompany[a]) / (100 + favorByCompany[a]) - (3.2e6 - repByCompany[b]) / (100 + favorByCompany[b]))[0];
         // Hack: We will be working indefinitely, so we rely on an external script (daemon + faction-manager) to join this faction for us, or for checkForNewPrioritiesInterval to elapse.
@@ -625,30 +633,47 @@ export async function tryJoinFaction(ns, factionName) {
     return true;
 }
 
-/** @param {NS} ns */
+/** @param {NS} ns
+ * @returns {Promise<Player>} the result of ns.getPlayer() */
 async function getPlayerInfo(ns) {
     return ns.getPlayer(); // Note: Decided that we call this frequently enough it is not worth ram-dodging
     // return await getNsDataThroughFile(ns, `ns.getPlayerInfo()`, '/Temp/player-info.txt');
 }
 
-/** @param {NS} ns */
+/** @param {NS} ns
+ *  @returns {Promise<string[]>} List of new faction invites */
+async function checkFactionInvites(ns) {
+    return await getNsDataThroughFile(ns, 'ns.checkFactionInvitations()', '/Temp/checkFactionInvitations.txt');
+}
+
+/** @param {NS} ns
+ *  @returns {Promise<GangGenInfo|boolean>} Gang information, if we're in a gang, or False */
+async function getGangInfo(ns) {
+    return await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt')
+}
+
+/** @param {NS} ns 
+ *  @returns {Promise<Number>} Current reputation with the specified faction */
 async function getFactionReputation(ns, factionName) {
-    return await getNsDataThroughFile(ns, `ns.getFactionRep(ns.args[0])`, '/Temp/faction-rep.txt', [factionName]);
+    return await getNsDataThroughFile(ns, `ns.getFactionRep(ns.args[0])`, '/Temp/getFactionRep.txt', [factionName]);
 }
 
-/** @param {NS} ns */
+/** @param {NS} ns
+ *  @returns {Promise<Number>} Current reputation with the specified company */
 async function getCompanyReputation(ns, companyName) {
-    return await getNsDataThroughFile(ns, `ns.getCompanyRep(ns.args[0])`, '/Temp/company-rep.txt', [companyName]);
+    return await getNsDataThroughFile(ns, `ns.getCompanyRep(ns.args[0])`, '/Temp/getCompanyRep.txt', [companyName]);
 }
 
-/** @param {NS} ns */
+/** @param {NS} ns
+ *  @returns {Promise<Number>} Current favour with the specified faction */
 async function getCurrentFactionFavour(ns, factionName) {
-    return await getNsDataThroughFile(ns, `ns.getFactionFavor(ns.args[0])`, '/Temp/faction-favor.txt', [factionName]);
+    return await getNsDataThroughFile(ns, `ns.getFactionFavor(ns.args[0])`, '/Temp/getFactionFavor.txt', [factionName]);
 }
 
-/** @param {NS} ns */
+/** @param {NS} ns
+ *  @returns {Promise<Number>} The hacking level required for the specified server */
 async function getServerRequiredHackLevel(ns, serverName) {
-    return await getNsDataThroughFile(ns, `ns.getServerRequiredHackingLevel(ns.args[0])`, '/Temp/server-required-hacking-level.txt', [serverName]);
+    return await getNsDataThroughFile(ns, `ns.getServerRequiredHackingLevel(ns.args[0])`, '/Temp/getServerRequiredHackingLevel.txt', [serverName]);
 }
 
 /** A special check for when we unlock donations with Daedalus, this is usually a good time to reset. 
@@ -761,14 +786,18 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     return currentReputation >= factionRepRequired;
 }
 
-async function stop(ns) { return await getNsDataThroughFile(ns, `ns.stopAction()`, '/Temp/stop-action.txt'); }
+/** Stop whatever focus work we're currently doing
+ * @param {NS} ns */
+async function stop(ns) { return await getNsDataThroughFile(ns, `ns.stopAction()`, '/Temp/stopAction.txt'); }
 
+/** Start the specified faction work
+ * @param {NS} ns */
 async function startWorkForFaction(ns, factionName, work, focus) {
-    return await getNsDataThroughFile(ns, `ns.workForFaction(ns.args[0], ns.args[1], ns.args[2])`, '/Temp/work-for-faction.txt', [factionName, work, focus])
+    return await getNsDataThroughFile(ns, `ns.workForFaction(ns.args[0], ns.args[1], ns.args[2])`, '/Temp/workForFaction.txt', [factionName, work, focus])
 }
 
-/** @param {NS} ns 
- * Try all work types and see what gives the best rep gain with this faction! */
+/** Try all work types and see what gives the best rep gain with this faction!
+ * @param {NS} ns  */
 async function detectBestFactionWork(ns, factionName) {
     let bestWork, bestRepRate = 0;
     for (const work of ["security", "field", "hacking"]) {
@@ -838,8 +867,10 @@ export async function tryBuyReputation(ns) {
 // Used when working for a company to see if their server has been backdoored. If so, we can expect an increase in rep-gain (used for predicting an ETA)
 const serverByCompany = { "Bachman & Associates": "b-and-a", "ECorp": "ecorp", "Clarke Incorporated": "clarkinc", "OmniTek Incorporated": "omnitek", "NWO": "nwo", "Blade Industries": "blade", "MegaCorp": "megacorp", "KuaiGong International": "kuai-gong", "Fulcrum Technologies": "fulcrumtech", "Four Sigma": "4sigma" };
 
+/** Apply to the specified role at the specified company
+ * @param {NS} ns */
 async function tryApplyToCompany(ns, company, role) {
-    return await getNsDataThroughFile(ns, `ns.applyToCompany(ns.args[0], ns.args[1])`, '/Temp/apply-to-company.txt', [company, role])
+    return await getNsDataThroughFile(ns, `ns.applyToCompany(ns.args[0], ns.args[1])`, '/Temp/applyToCompany.txt', [company, role])
 }
 
 /** @param {NS} ns */
@@ -851,7 +882,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
 
     let player = (await getPlayerInfo(ns));
     if (player.factions.includes(factionName)) return false; // Only return true if we did work to earn a new faction invite
-    if ((await getNsDataThroughFile(ns, 'ns.checkFactionInvitations()', '/Temp/player-faction-invites.txt')).includes(factionName))
+    if ((await checkFactionInvites(ns)).includes(factionName))
         return waitForInvite ? await waitForFactionInvite(ns, factionName) : false;
     // TODO: In some scenarios, the best career path may require combat stats, this hard-codes the optimal path for hack stats
     const itJob = jobs.find(j => j.name == "it");
@@ -921,7 +952,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         // TODO: If we ever get rid of the below periodic restart-work, we will need to monitor for interruptions with player.workType == e.g. "Work for Company"
         if (!studying && (!working || (Date.now() - lastActionRestart >= restartWorkInteval) /* We must periodically restart work to collect Rep Gains */)) {
             // Work for the company (assume daemon is grinding hack XP as fast as it can, so no point in studying for that)
-            if (await getNsDataThroughFile(ns, `ns.workForCompany(ns.args[0], ns.args[1])`, '/Temp/work-for-company.txt', [companyName, shouldFocusAtWork])) {
+            if (await getNsDataThroughFile(ns, `ns.workForCompany(ns.args[0], ns.args[1])`, '/Temp/workForCompany.txt', [companyName, shouldFocusAtWork])) {
                 working = true;
                 if (shouldFocusAtWork) ns.tail(); // Force a tail window open to help the user kill this script if they accidentally closed the tail window and don't want to keep stealing focus
                 currentReputation = await getCompanyReputation(ns, companyName); // Update to capture the reputation earned when restarting work
@@ -935,7 +966,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         }
         if (lastStatus != status || (Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
             if (!backdoored) // Check if an external script has backdoored this company's server yet. If so, it affects our ETA. (Don't need to check again once we discover it is)
-                backdoored = await getNsDataThroughFile(ns, `ns.getServer(ns.args[0]).backdoorInstalled`, '/Temp/company-is-backdoored.txt', [serverByCompany[companyName]]);
+                backdoored = await getNsDataThroughFile(ns, `ns.getServer(ns.args[0]).backdoorInstalled`, '/Temp/getServer-backdoorInstalled.txt', [serverByCompany[companyName]]);
             const cancellationMult = backdoored ? 0.75 : 0.5; // We will lose some of our gained reputation when we stop working early
             repGainRatePerMs *= cancellationMult;
             // Actually measure how much reputation we've earned since our last update, to give a more accurate ETA including external sources of rep
