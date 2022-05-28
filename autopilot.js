@@ -11,7 +11,7 @@ const defaultBnOrder = [4.3, 1.3, 5.1, 9.2, 10.1, 2.1, 8.2, 10.3, 9.3, 11.3, 13.
 
 let options = null; // The options used at construction time
 const argsSchema = [ // The set of all command line arguments
-	['next-bn', 0], // If we destroy the current BN, the next BN to start
+	['next-bn', 12], // If we destroy the current BN, the next BN to start
 	['disable-auto-destroy-bn', false], // Set to true if you do not want to auto destroy this BN when done
 	['install-at-aug-count', 11], // Automatically install when we can afford this many new augmentations (with NF only counting as 1)
 	['install-at-aug-plus-nf-count', 14], // or... automatically install when we can afford this many augmentations including additional levels of Neuroflux
