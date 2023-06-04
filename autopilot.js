@@ -60,6 +60,7 @@ function getTimeInBitnode() { return Date.now() - resetInfo.lastNodeReset; }
 
 /** @param {NS} ns **/
 export async function main(ns) {
+    ns.tail();
     const runOptions = getConfiguration(ns, argsSchema);
 
     const installCountdown = Date.now() + runOptions['install-countdown'];
